@@ -2,6 +2,9 @@
 
 This is a sample CSOM PowerShell Script to upload a large file to SharePoint Online folder.
 
+We cannot make a trusted upload with a single HTTP request, when the file size exceeds 100MB. 
+In that case, we should make a session to upload a file with multiple HTTP requests.
+
 ### Note
 If you really want to move large amount of files to SharePoint Online, CSOM call is not the right solution.
 In that case, please consider to use SharePoint Migration Tools (SPMT).
