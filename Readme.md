@@ -1,9 +1,6 @@
-# UploadToSPOFolder
+#UploadToSPOFolder
 
 This is a sample CSOM PowerShell Script to upload a large file to SharePoint Online folder.
-
-We cannot make a trusted upload with a single HTTP request, when the file size exceeds 100MB. 
-In that case, we should make a session to upload a file with multiple HTTP requests.
 
 ### Note
 If you really want to move large amount of files to SharePoint Online, CSOM call is not the right solution.
@@ -25,18 +22,20 @@ https://www.nuget.org/packages/Microsoft.SharePointOnline.CSOM
 
 ## How to Run - parameters
 
--localfile ... The target local file path to upload.
+-localfile ... The target local file (or folder) path to upload. 
 
 -spositeurl ... The target SPO site to upload file.
 
 -spofolderpath ... The existing target SPO folder to upload the file. 
 
--username ... The target user to upload the file.
+-SkipRootFolder ... (OPTIONAL) Skip the root folder creation. Only effective when uploading folder.
 
--password ... The password of the above user.
+-username ... (OPTIONAL) The target user to upload the file.
+
+-password ... (OPTIONAL) The password of the above user.
 
 ## Example
-.\UploadFileToSPOFolder.ps1 -localfile .\sampledata.txt -spositeUrl https://tenant.sharepoint.com/sites/siteA -spofolderpath Shared%20Documents/myfolder -username admin@tenant.onmicrosoft.com -password PASSWORD
+.\UploadFileToSPOFolder.ps1 -localfile .\sampledata.txt -spositeUrl https://tenant.sharepoint.com/sites/siteA -spofolderpath Shared%20Documents/myfolder
 
 
 ## Reference

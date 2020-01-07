@@ -15,10 +15,16 @@ Please note: None of the conditions outlined in the disclaimer above will superc
              the Premier Customer Services Description.
 #>
 param(
+    [Parameter(Mandatory=$true)]
     $localfile,
+    [Parameter(Mandatory=$true)]
     $spositeUrl,
+    [Parameter(Mandatory=$true)]
     $spofolderpath,
+    [switch] $SkipRootFolder,
+    [Parameter(Mandatory=$false)]
     $username,
+    [Parameter(Mandatory=$false)]
     $password
 )
 
@@ -28,7 +34,17 @@ $ErrorActionPreference = "Stop"
 
 
 $script:context = New-Object Microsoft.SharePoint.Client.ClientContext($spositeUrl)
-$secpass = ConvertTo-SecureString $password -AsPlainText -Force
+$pwd = $null
+if ($username -eq $null)
+{
+  $cred = Get-Credential
+  $username = $cred.UserName
+  $secpass = $cred.Password
+}
+else
+{
+  $secpass = convertto-securestring $password -AsPlainText -Force
+}
 $script:context.Credentials = New-Object Microsoft.SharePoint.Client.SharePointOnlineCredentials($username, $secpass)
 
 
@@ -88,124 +104,195 @@ function ExecuteQueryWithIncrementalRetry {
     throw "Maximum retry attempts {0}, have been attempted." -F $retryCount;
 }
 
-
-
-
-$web = $context.Web
-$spofolder = $web.GetFolderByServerRelativeUrl($spofolderpath)
-$script:context.Load($web)
-$script:context.Load($spofolder)
-ExecuteQueryWithIncrementalRetry -retryCount 5
-
-$leafname = Split-Path -Leaf $localfile
-$uploadFile = $null
-
-$inputFile = get-item $localfile
-
-$blockSize = 1000000 # 1MB
-$uploadId = (New-Guid)
-$fileSize = $inputFile.Length
-
-
-
-if ($fileSize -le $blockSize)
+function UploadFile($inputFile, $spofolder)
 {
-    $fs = New-Object System.IO.FileStream($localfile, [System.IO.FileMode]::Open)
+    $blockSize = 100000000 # 100MB
+    $uploadId = (New-Guid)
+    $fileSize = $inputFile.Length
+    $uploadFile = $null
+    $leafname = $inputFile.Name
 
-    $fileInfo = New-Object Microsoft.SharePoint.Client.FileCreationInformation
-    $fileInfo.ContentStream = $fs
-    $fileInfo.Url = $leafname
-    $fileInfo.Overwrite = $true
-    $uploadFile = $spofolder.Files.Add($fileInfo)
-    
-    $script:context.Load($uploadFile)
-    ExecuteQueryWithIncrementalRetry -retryCount 5
-    $fs.Dispose()
-
-}
-else 
-{
-    $bytesUploaded = $null
-    $fs = $null
-    try
+    if ($fileSize -le $blockSize)
     {
-        $fs = [System.IO.File]::Open($localfile, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
-        $br = New-Object System.IO.BinaryReader($fs)
-        $buffer = [System.Byte[]]::CreateInstance([System.Byte], $blockSize)
-        $lastBuffer = $null
-        $fileoffset = 0
-        $totalBytesRead = 0
-        $bytesRead
-        $first = $true
-        $last = $false
+        $fs = New-Object System.IO.FileStream($inputFile.FullName, [System.IO.FileMode]::Open)
 
+        $fileInfo = New-Object Microsoft.SharePoint.Client.FileCreationInformation
+        $fileInfo.ContentStream = $fs
+        $fileInfo.Url = $leafname
+        $fileInfo.Overwrite = $true
+        $uploadFile = $spofolder.Files.Add($fileInfo)
         
+        $script:context.Load($uploadFile)
+        ExecuteQueryWithIncrementalRetry -retryCount 5
+        $fs.Dispose()
 
-        while(($bytesRead = $br.Read($buffer, 0, $buffer.Length)) -gt 0)
+    }
+    else 
+    {
+        $bytesUploaded = $null
+        $fs = $null
+        try
         {
-            $totalBytesRead = $totalBytesRead + $bytesRead;
+            $fs = [System.IO.File]::Open($inputFile.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+            $br = New-Object System.IO.BinaryReader($fs)
+            $buffer = [System.Byte[]]::CreateInstance([System.Byte], $blockSize)
+            $lastBuffer = $null
+            $fileoffset = 0
+            $totalBytesRead = 0
+            $bytesRead
+            $first = $true
+            $last = $false
 
-            if ($totalBytesRead -eq $fileSize)
+            while(($bytesRead = $br.Read($buffer, 0, $buffer.Length)) -gt 0)
             {
-                $last = $true
-                $lastBuffer = [System.Byte[]]::CreateInstance([System.Byte], $bytesRead)
-                [System.Array]::Copy($buffer, 0, $lastBuffer, 0, $bytesRead)
-            }
+                $totalBytesRead = $totalBytesRead + $bytesRead;
 
-            if ($first)
-            {
-                $contentStream = New-Object System.IO.MemoryStream
-
-                $fileInfo = New-Object Microsoft.SharePoint.Client.FileCreationInformation
-                $fileInfo.ContentStream = $contentStream
-                $fileInfo.Url = $leafname
-                $fileInfo.Overwrite = $true
-                $uploadFile = $spofolder.Files.Add($fileInfo)
-
-                $s = New-Object System.IO.MemoryStream
-                $s.Write($buffer, 0, $buffer.Length)
-                $s.Position = 0
-
-                $bytesUploaded = $uploadFile.StartUpload($uploadId, $s);
-                ExecuteQueryWithIncrementalRetry -retryCount 5
-                $fileoffset = $bytesUploaded.Value
-                $s.Dispose()
-
-                $first = $false
-            }
-            else
-            {
-                $uploadFile = $script:context.Web.GetFileByServerRelativeUrl(($spofolder.ServerRelativeUrl + "/" + $leafname));
-
-                if ($last)
+                if ($totalBytesRead -eq $fileSize)
                 {
-                    $s = New-Object System.IO.MemoryStream
-                    $s.Write($lastBuffer, 0, $lastBuffer.Length)
-                    $s.Position = 0
-                    $uploadFile = $uploadFile.FinishUpload($uploadId, $fileoffset, $s);
-                    ExecuteQueryWithIncrementalRetry -retryCount 5 
-                    $s.Dispose()
+                    $last = $true
+                    $lastBuffer = [System.Byte[]]::CreateInstance([System.Byte], $bytesRead)
+                    [System.Array]::Copy($buffer, 0, $lastBuffer, 0, $bytesRead)
                 }
-                else 
+
+                if ($first)
                 {
+                    $contentStream = New-Object System.IO.MemoryStream
+
+                    $fileInfo = New-Object Microsoft.SharePoint.Client.FileCreationInformation
+                    $fileInfo.ContentStream = $contentStream
+                    $fileInfo.Url = $leafname
+                    $fileInfo.Overwrite = $true
+                    $uploadFile = $spofolder.Files.Add($fileInfo)
+
                     $s = New-Object System.IO.MemoryStream
                     $s.Write($buffer, 0, $buffer.Length)
                     $s.Position = 0
 
-                    $bytesUploaded = $uploadFile.ContinueUpload($uploadId, $fileoffset, $s);
-                    ExecuteQueryWithIncrementalRetry -retryCount 5 
-                    $fileoffset = $bytesUploaded.Value;
+                    $bytesUploaded = $uploadFile.StartUpload($uploadId, $s);
+                    ExecuteQueryWithIncrementalRetry -retryCount 5
+                    $fileoffset = $bytesUploaded.Value
                     $s.Dispose()
+
+                    $first = $false
+                }
+                else
+                {
+                    $uploadFile = $script:context.Web.GetFileByServerRelativeUrl(($spofolder.ServerRelativeUrl + "/" + $leafname));
+
+                    if ($last)
+                    {
+                        $s = New-Object System.IO.MemoryStream
+                        $s.Write($lastBuffer, 0, $lastBuffer.Length)
+                        $s.Position = 0
+                        $uploadFile = $uploadFile.FinishUpload($uploadId, $fileoffset, $s);
+                        ExecuteQueryWithIncrementalRetry -retryCount 5 
+                        $s.Dispose()
+                    }
+                    else 
+                    {
+                        $s = New-Object System.IO.MemoryStream
+                        $s.Write($buffer, 0, $buffer.Length)
+                        $s.Position = 0
+
+                        $bytesUploaded = $uploadFile.ContinueUpload($uploadId, $fileoffset, $s);
+                        ExecuteQueryWithIncrementalRetry -retryCount 5 
+                        $fileoffset = $bytesUploaded.Value;
+                        $s.Dispose()
+                    }
                 }
             }
         }
-    }
-    finally
-    {
-        if ($fs -ne $null)
+        finally
         {
-            $fs.Dispose()
+            if ($fs -ne $null)
+            {
+                $fs.Dispose()
+            }
         }
     }
 }
 
+function CreateSPOFolder($localFolderName, $spoParentFolder)
+{
+    $web = $script:context.Web
+    $spofolder = $web.GetFolderByServerRelativeUrl($spoParentFolder.Replace(($spositeUrl + "/"), ""))
+    $folder = $spofolder.Folders.Add($localFolderName)
+    $script:context.Load($folder)
+    ExecuteQueryWithIncrementalRetry -retryCount 5
+}
+
+function GetSPOFolder($spofolderpath)
+{
+    $web = $script:context.Web
+    $spofolder = $web.GetFolderByServerRelativeUrl($spofolderpath.Replace(($spositeUrl + "/"), ""))
+    $script:context.Load($spofolder)
+    ExecuteQueryWithIncrementalRetry -retryCount 5
+    return $spofolder
+}
+
+function GetLocalParentFolder($currentItem)
+{
+    if ($currentItem.Mode.StartsWith("d"))
+    {
+        return $currentItem.Parent.FullName
+    }
+    else {
+        return $currentItem.DirectoryName
+    }
+}
+
+function GetSPORelativeFolderPath($spoRootFolder, $localRootFolder, $localPath)
+{
+    return ($spoRootFolder.TrimEnd("/") + $localPath.Replace($localRootFolder, "").Replace("`\", "/"))
+}
+
+function UploadFolder($localRootFolder, $spoRootFolderPath, $skipRootFolder)
+{
+    $localRootFolderPath = $localRootFolder.FullName
+    # Get the list of target folders/files
+    $childitems = Get-ChildItem $localRootFolderPath -Recurse
+    $parentSPOFolder = $spoRootFolderPath
+    $parentLocalFolder = $localRootFolder.Parent.FullName
+
+    if (!$skipRootFolder)
+    {
+        # Create Root Folder
+        CreateSPOFolder -localFolderName $localRootFolder.Name -spoParentFolder $spoRootFolderPath
+        # Change the Local Base Folder Path
+        $localRootFolderPath = $localRootFolder.Parent.FullName
+    }
+
+    foreach ($citem in $childitems)
+    {
+        # Get Parent Folder
+        $thisParent = GetLocalParentFolder -currentItem $citem
+        if ($parentLocalFolder -ne $thisParent)
+        {
+            # Convert from local path to SPO destination path.
+            $parentSPOFolder = GetSPORelativeFolderPath -spoRootFolder $spoRootFolderPath -localRootFolder $localRootFolderPath -localPath $thisParent
+            # Change the SPO Target Folder here.
+            $spofolder = GetSPOFolder -spofolderpath $parentSPOFolder
+            $parentLocalFolder = $thisParent
+        }
+
+        if ($citem.Mode.StartsWith("d"))
+        {
+            CreateSPOFolder -localFolderName $citem.Name -spoParentFolder $parentSPOFolder
+        }
+        else {
+            UploadFile -inputFile $citem -spofolder $spofolder
+        }
+    }
+}
+
+$inputFile = get-item $localfile
+if (!$inputFile.Mode.StartsWith("d"))
+{
+    #Single File Upload
+    $spofolder = GetSPOFolder -spofolderpath $spofolderpath
+    UploadFile -inputFile $inputFile -spofolder $spofolder
+}
+else {
+    #Folder Upload
+    UploadFolder -localRootFolder $inputFile -spoRootFolderPath $spofolderpath -skipRootFolder $SkipRootFolder
+}
